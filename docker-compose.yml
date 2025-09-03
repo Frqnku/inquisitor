@@ -38,3 +38,4 @@ services:
 networks:
   inquisitor-net:
     driver: bridge
+    name: inquisitor-net
