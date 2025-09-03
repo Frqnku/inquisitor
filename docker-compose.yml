@@ -1,22 +1,27 @@
 services:
   ftp_server:
-    build:
-      context: ./ftp_server
+    image: stilliard/pure-ftpd:hardened
     container_name: ftp_server
+    environment:
+      - FTP_USER_NAME=anonymous
+      - FTP_USER_PASS=anonymous
+      - FTP_USER_HOME=/home/ftpusers/anonymous
+      - FTP_MAX_CLIENTS=10
+      - FTP_MAX_PER_IP=5
+      - ADDED_FLAGS=--create-home
+    ports:
+      - "2121:21"
+      - "21100-21110:21100-21110"
     networks:
       - inquisitor-net
-    ports:
-      - "21:21"
-      - "20:20"
 
   ftp_client:
-    build:
-      context: ./ftp_client
+    image: alpine:latest
     container_name: ftp_client
     networks:
       - inquisitor-net
-    depends_on:
-      - ftp_server
+    tty: true
+    command: tail -f /dev/null
 
   inquisitor:
     build:
