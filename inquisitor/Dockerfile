@@ -20,10 +20,13 @@ FROM debian:bookworm-slim
 
 RUN apt-get update && apt-get install -y \
     libpcap0.8 \
+	iproute2 \
+    net-tools \
+    iputils-ping \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
 COPY --from=builder /app/target/release/inquisitor .
 
-CMD ["./inquisitor"]
+CMD ["sleep", "infinity"]
